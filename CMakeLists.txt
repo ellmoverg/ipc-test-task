@@ -16,7 +16,7 @@ find_package(GTest)
 
 add_library(common INTERFACE)
 target_include_directories(common INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/common)
-target_link_libraries(common INTERFACE ZLIB::ZLIB)
+target_link_libraries(common INTERFACE ZLIB::ZLIB Threads::Threads)
 target_compile_options(common INTERFACE -Wall -Wextra -Wpedantic)
 target_compile_options(common INTERFACE $<$<CXX_COMPILER_ID:GNU>:-Winterference-size>)
 
@@ -24,7 +24,7 @@ add_executable(producer producer/main.cpp)
 target_link_libraries(producer PRIVATE common)
 
 add_executable(consumer consumer/main.cpp)
-target_link_libraries(consumer PRIVATE common Threads::Threads)
+target_link_libraries(consumer PRIVATE common)
 
 if(GTest_FOUND)
     enable_testing()

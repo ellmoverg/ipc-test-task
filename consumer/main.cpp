@@ -1,3 +1,4 @@
+#include "controls.h"
 #include "layout.h"
 #include "ring.h"
 #include "shm.h"
@@ -6,11 +7,9 @@
 #include <bit>
 #include <chrono>
 #include <cinttypes>
-#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
-#include <functional>
 #include <optional>
 #include <stdexcept>
 #include <thread>
@@ -19,10 +18,6 @@ namespace {
 
 constexpr auto kRetryDelay = std::chrono::microseconds(50);
 constexpr auto kAttachDelay = std::chrono::milliseconds(100);
-
-std::atomic<bool> g_stop{false};
-
-void on_signal(int) { g_stop = true; }
 
 struct Counters {
     std::atomic<std::uint64_t> packets{0};
@@ -40,44 +35,44 @@ std::uint64_t get(const std::atomic<std::uint64_t>& counter) {
     return counter.load(std::memory_order_relaxed);
 }
 
-void report_every_second(const Counters& c) {
-    using clock = std::chrono::steady_clock;
-    auto last_time = clock::now();
-    auto next = last_time;
-    std::uint64_t last_packets = 0;
-    std::uint64_t last_bytes = 0;
-    for (;;) {
-        next += std::chrono::seconds(1);
-        std::this_thread::sleep_until(next);
-        if (g_stop)
-            return;
-        const auto now = clock::now();
-        const double seconds = std::chrono::duration<double>(now - last_time).count();
-        const std::uint64_t packets = get(c.packets);
-        const std::uint64_t bytes = get(c.bytes);
+// Runs on the control thread once a second.
+class Reporter {
+public:
+    explicit Reporter(const Counters& c) : c_(c) {}
+
+    void tick() {
+        const auto now = std::chrono::steady_clock::now();
+        const double seconds = std::chrono::duration<double>(now - last_time_).count();
+        const std::uint64_t packets = get(c_.packets);
+        const std::uint64_t bytes = get(c_.bytes);
         std::printf("packets %" PRIu64 " | %.0f pkt/s | %.1f MB/s | corrupt %" PRIu64
                     ", out of order %" PRIu64 ", time reversed %" PRIu64 "\n",
-                    packets, static_cast<double>(packets - last_packets) / seconds,
-                    static_cast<double>(bytes - last_bytes) / seconds / 1e6, get(c.corrupt),
-                    get(c.out_of_order), get(c.time_reversed));
+                    packets, static_cast<double>(packets - last_packets_) / seconds,
+                    static_cast<double>(bytes - last_bytes_) / seconds / 1e6, get(c_.corrupt),
+                    get(c_.out_of_order), get(c_.time_reversed));
         std::fflush(stdout);
-        last_time = now;
-        last_packets = packets;
-        last_bytes = bytes;
+        last_time_ = now;
+        last_packets_ = packets;
+        last_bytes_ = bytes;
     }
-}
 
-std::optional<ipc::SharedMemory> attach() {
-    while (!g_stop) {
+private:
+    const Counters& c_;
+    std::chrono::steady_clock::time_point last_time_ = std::chrono::steady_clock::now();
+    std::uint64_t last_packets_ = 0;
+    std::uint64_t last_bytes_ = 0;
+};
+
+ipc::SharedMemory attach() {
+    for (;;) {
         auto shm = ipc::SharedMemory::try_open(ipc::kShmName);
         if (shm && shm->size() >= sizeof(ipc::ControlBlock)) {
             const auto* cb = static_cast<const ipc::ControlBlock*>(shm->data());
             if (cb->state.load(std::memory_order_acquire) == ipc::State::Ready)
-                return shm;
+                return std::move(*shm);
         }
         std::this_thread::sleep_for(kAttachDelay);
     }
-    return std::nullopt;
 }
 
 void check_geometry(const ipc::ControlBlock& cb, std::size_t mapped_size) {
@@ -90,27 +85,23 @@ void check_geometry(const ipc::ControlBlock& cb, std::size_t mapped_size) {
 }
 
 int main() {
-    std::signal(SIGINT, on_signal);
-    std::signal(SIGTERM, on_signal);
-
     try {
         std::puts("consumer: waiting for producer");
-        std::optional<ipc::SharedMemory> shm = attach();
-        if (!shm)
-            return EXIT_SUCCESS;
-        auto* cb = static_cast<ipc::ControlBlock*>(shm->data());
-        check_geometry(*cb, shm->size());
+        ipc::SharedMemory shm = attach();
+        auto* cb = static_cast<ipc::ControlBlock*>(shm.data());
+        check_geometry(*cb, shm.size());
         const std::uint64_t payload_size = cb->payload_size;
         std::printf("consumer: attached, payload %" PRIu64 " B, %" PRIu32 " slots\n", payload_size,
                     cb->slot_count);
 
         ipc::RingReader reader(cb);
         Counters counters;
-        std::thread reporter(report_every_second, std::cref(counters));
+        Reporter reporter(counters);
+        ipc::Controls controls([&reporter] { reporter.tick(); });
         std::optional<std::uint64_t> expected_seq;
         std::uint64_t last_timestamp = 0;
 
-        while (!g_stop) {
+        while (!ipc::g_stop) {
             const std::byte* slot = reader.try_peek();
             if (!slot) {
                 if (cb->state.load(std::memory_order_acquire) == ipc::State::Closed &&
@@ -135,8 +126,7 @@ int main() {
             reader.release();
         }
 
-        g_stop = true;
-        reporter.join();
+        controls.stop();
         std::printf("consumer: stopped after %" PRIu64 " packets, corrupt %" PRIu64
                     ", out of order %" PRIu64 ", time reversed %" PRIu64 "\n",
                     get(counters.packets), get(counters.corrupt), get(counters.out_of_order),

@@ -1,14 +1,13 @@
+#include "controls.h"
 #include "layout.h"
 #include "ring.h"
 #include "shm.h"
 
 #include <algorithm>
-#include <atomic>
 #include <bit>
 #include <charconv>
 #include <chrono>
 #include <cinttypes>
-#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -21,10 +20,6 @@ namespace {
 
 constexpr std::size_t kRingBytes = 4 << 20;
 constexpr auto kRetryDelay = std::chrono::microseconds(50);
-
-std::atomic<bool> g_stop{false};
-
-void on_signal(int) { g_stop = true; }
 
 std::uint32_t parse_payload_size(std::string_view arg) {
     std::uint32_t size = 0;
@@ -43,10 +38,8 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
-    std::signal(SIGINT, on_signal);
-    std::signal(SIGTERM, on_signal);
-
     try {
+        ipc::Controls controls;
         const std::size_t stride = ipc::slot_stride(payload_size);
         const auto slot_count = static_cast<std::uint32_t>(
             std::bit_floor(std::max<std::size_t>(kRingBytes / stride, 2)));
@@ -63,9 +56,9 @@ int main(int argc, char* argv[]) {
 
         ipc::RingWriter writer(cb);
         std::uint64_t seq = 0;
-        while (!g_stop) {
+        while (!ipc::g_stop) {
             std::byte* slot;
-            while (!(slot = writer.try_reserve()) && !g_stop)
+            while (!(slot = writer.try_reserve()) && !ipc::g_stop)
                 std::this_thread::sleep_for(kRetryDelay);
             if (!slot)
                 break;
