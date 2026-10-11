@@ -1,6 +1,7 @@
 #pragma once
 
 
+#include <time.h>
 #include <zlib.h>
 
 #include <atomic>
@@ -22,6 +23,12 @@ struct PacketHeader {
     std::uint32_t payload_size;
     std::uint32_t checksum;
 };
+
+inline std::uint64_t now_ns() {
+    timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<std::uint64_t>(ts.tv_sec) * 1'000'000'000 + static_cast<std::uint64_t>(ts.tv_nsec);
+}
 
 inline std::uint32_t packet_checksum(const PacketHeader& h, const std::byte* payload) {
     auto feed = [](uLong crc, const void* p, std::size_t n) {

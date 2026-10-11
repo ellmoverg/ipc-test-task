@@ -10,6 +10,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
+find_package(Threads REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(GTest)
 
@@ -23,7 +24,7 @@ add_executable(producer producer/main.cpp)
 target_link_libraries(producer PRIVATE common)
 
 add_executable(consumer consumer/main.cpp)
-target_link_libraries(consumer PRIVATE common)
+target_link_libraries(consumer PRIVATE common Threads::Threads)
 
 if(GTest_FOUND)
     enable_testing()
