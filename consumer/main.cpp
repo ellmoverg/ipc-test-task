@@ -46,10 +46,10 @@ public:
         const std::uint64_t packets = get(c_.packets);
         const std::uint64_t bytes = get(c_.bytes);
         std::printf("packets %" PRIu64 " | %.0f pkt/s | %.1f MB/s | corrupt %" PRIu64
-                    ", out of order %" PRIu64 ", time reversed %" PRIu64 "\n",
+                    ", out of order %" PRIu64 ", time reversed %" PRIu64 "%s\n",
                     packets, static_cast<double>(packets - last_packets_) / seconds,
                     static_cast<double>(bytes - last_bytes_) / seconds / 1e6, get(c_.corrupt),
-                    get(c_.out_of_order), get(c_.time_reversed));
+                    get(c_.out_of_order), get(c_.time_reversed), ipc::g_paused ? " [paused]" : "");
         std::fflush(stdout);
         last_time_ = now;
         last_packets_ = packets;
@@ -97,11 +97,15 @@ int main() {
         ipc::RingReader reader(cb);
         Counters counters;
         Reporter reporter(counters);
-        ipc::Controls controls([&reporter] { reporter.tick(); });
+        ipc::Controls controls("consumer", [&reporter] { reporter.tick(); });
         std::optional<std::uint64_t> expected_seq;
         std::uint64_t last_timestamp = 0;
 
         while (!ipc::g_stop) {
+            if (ipc::g_paused) {
+                std::this_thread::sleep_for(ipc::kPauseDelay);
+                continue;
+            }
             const std::byte* slot = reader.try_peek();
             if (!slot) {
                 if (cb->state.load(std::memory_order_acquire) == ipc::State::Closed &&

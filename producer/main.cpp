@@ -39,7 +39,7 @@ int main(int argc, char* argv[]) {
     }
 
     try {
-        ipc::Controls controls;
+        ipc::Controls controls("producer");
         const std::size_t stride = ipc::slot_stride(payload_size);
         const auto slot_count = static_cast<std::uint32_t>(
             std::bit_floor(std::max<std::size_t>(kRingBytes / stride, 2)));
@@ -57,6 +57,10 @@ int main(int argc, char* argv[]) {
         ipc::RingWriter writer(cb);
         std::uint64_t seq = 0;
         while (!ipc::g_stop) {
+            if (ipc::g_paused) {
+                std::this_thread::sleep_for(ipc::kPauseDelay);
+                continue;
+            }
             std::byte* slot;
             while (!(slot = writer.try_reserve()) && !ipc::g_stop)
                 std::this_thread::sleep_for(kRetryDelay);
