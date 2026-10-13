@@ -91,7 +91,7 @@ private:
 
             if (fds[0].revents & POLLIN)
                 handle_signals();
-            if (fds[1].revents & (POLLIN | POLLHUP))
+            if (fds[1].revents)
                 handle_keys(fds[1]);
             if (on_tick_ && clock::now() >= next_tick) {
                 on_tick_();
